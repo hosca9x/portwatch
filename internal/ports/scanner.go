@@ -1,56 +1,91 @@
+// Package ports provides functionality for scanning, filtering, and
+// comparing open network ports on the local system.
 package ports
 
 import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/user/portwatch/internal/config"
 )
 
-// PortState represents the state of a single port.
-type PortState struct {
-	Protocol string
-	Port     int
-	Open     bool
-}
-
-// Snapshot holds all observed open ports at a point in time.
-type Snapshot struct {
-	Timestamp time.Time
-	Ports     []PortState
-}
-
-// Scanner scans local ports within a given range.
+// Scanner scans the local system for open ports.
 type Scanner struct {
-	StartPort int
-	EndPort   int
-	Timeout   time.Duration
+	cfg    *config.Config
+	filter *Filter
 }
 
-// NewScanner creates a Scanner with sensible defaults.
-func NewScanner(start, end int) *Scanner {
+// NewScanner creates a new Scanner using the provided configuration.
+func NewScanner(cfg *config.Config) *Scanner {
 	return &Scanner{
-		StartPort: start,
-		EndPort:   end,
-		Timeout:   500 * time.Millisecond,
+		cfg:    cfg,
+		filter: NewFilter(cfg),
 	}
 }
 
-// Scan probes each TCP port in the configured range and returns a Snapshot.
-func (s *Scanner) Scan() (*Snapshot, error) {
-	if s.StartPort < 1 || s.EndPort > 65535 || s.StartPort > s.EndPort {
-		return nil, fmt.Errorf("invalid port range %d-%d", s.StartPort, s.EndPort)
-	}
+// Scan probes each protocol/port combination defined by the config and
+// returns a snapshot of all ports that are currently open and pass the
+// filter rules.
+func (s *Scanner) Scan() ([]Entry, error) {
+	var entries []Entry
 
-	snap := &Snapshot{Timestamp: time.Now()}
+	for _, proto := range s.cfg.Protocols {
+		for port := 1; port <= 65535; port++ {
+			if !s.filter.Allow(proto, port) {
+				continue
+			}
 
-	for port := s.StartPort; port <= s.EndPort; port++ {
-		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		conn, err := net.DialTimeout("tcp", addr, s.Timeout)
-		if err == nil {
-			conn.Close()
-			snap.Ports = append(snap.Ports, PortState{Protocol: "tcp", Port: port, Open: true})
+			open, err := probePort(proto, port, s.cfg.Timeout)
+			if err != nil {
+				// Connection refused or timeout — port is closed, skip silently.
+				continue
+			}
+			if open {
+				entries = append(entries, Entry{
+					Proto: proto,
+					Port:  port,
+				})
+			}
 		}
 	}
 
-	return snap, nil
+	return entries, nil
+}
+
+// probePort attempts a connection to the given protocol/port on localhost.
+// Returns true if the port is open, false if it is closed or filtered.
+func probePort(proto string, port int, timeout time.Duration) (bool, error) {
+	address := fmt.Sprintf("127.0.0.1:%d", port)
+
+	switch proto {
+	case "tcp", "tcp4", "tcp6":
+		conn, err := net.DialTimeout(proto, address, timeout)
+		if err != nil {
+			return false, err
+		}
+		_ = conn.Close()
+		return true, nil
+
+	case "udp", "udp4", "udp6":
+		// UDP probing is inherently unreliable; we attempt a send/recv
+		// with a short deadline and treat a response as "open".
+		conn, err := net.DialTimeout(proto, address, timeout)
+		if err != nil {
+			return false, err
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+		_, _ = conn.Write([]byte{})
+		buf := make([]byte, 1)
+		_, err = conn.Read(buf)
+		if err != nil {
+			// No response is ambiguous for UDP; treat as closed.
+			return false, err
+		}
+		return true, nil
+
+	default:
+		return false, fmt.Errorf("unsupported protocol: %s", proto)
+	}
 }
