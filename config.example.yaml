@@ -1,0 +1,17 @@
+# portwatch example configuration
+
+# How often to scan open ports (Go duration string)
+interval: 30s
+
+# Path to write alert log. Leave empty to use stdout.
+alert_file: ""
+
+# Ports to ignore (never alert on these)
+ignore:
+  - 22    # SSH
+  - 53    # DNS
+
+# Protocols to monitor
+protocols:
+  - tcp
+  - udp
