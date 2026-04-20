@@ -10,68 +10,65 @@ import (
 	"github.com/user/portwatch/internal/ports"
 )
 
-// Daemon periodically scans open ports and alerts on changes.
+// Daemon orchestrates periodic port scanning, diffing, alerting, and metrics.
 type Daemon struct {
-	cfg      *config.Config
-	scanner  *ports.Scanner
-	notifier *alert.Notifier
-	snapshotPath string
+	cfg       *config.Config
+	watcher   *ports.Watcher
+	notifier  *alert.Notifier
+	collector *ports.Collector
 }
 
-// New creates a new Daemon with the given config.
-func New(cfg *config.Config, snapshotPath string) (*Daemon, error) {
-	scanner := ports.NewScanner(cfg)
-	notifier, err := alert.NewNotifier(cfg)
-	if err != nil {
-		return nil, err
-	}
+// New creates a Daemon from the provided configuration.
+func New(cfg *config.Config) *Daemon {
 	return &Daemon{
-		cfg:          cfg,
-		scanner:      scanner,
-		notifier:     notifier,
-		snapshotPath: snapshotPath,
-	}, nil
+		cfg:      cfg,
+		watcher:  ports.NewWatcher(cfg),
+		notifier: alert.NewNotifier(cfg),
+		collector: ports.NewCollector(),
+	}
+}
+
+// Metrics returns a snapshot of the current scan metrics.
+func (d *Daemon) Metrics() ports.ScanMetrics {
+	return d.collector.Snapshot()
 }
 
 // Run starts the daemon loop, blocking until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
-	interval := time.Duration(d.cfg.IntervalSeconds) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	log.Printf("portwatch: starting — interval %s", d.cfg.Interval)
 
-	log.Printf("portwatch daemon started (interval: %s)", interval)
-
-	// Run once immediately on start.
-	if err := d.tick(); err != nil {
-		log.Printf("scan error: %v", err)
-	}
+	results := d.watcher.Watch(ctx)
 
 	for {
 		select {
-		case <-ticker.C:
-			if err := d.tick(); err != nil {
-				log.Printf("scan error: %v", err)
-			}
 		case <-ctx.Done():
-			log.Println("portwatch daemon stopped")
-			return ctx.Err()
+			log.Println("portwatch: shutting down")
+			return nil
+
+		case res, ok := <-results:
+			if !ok {
+				return nil
+			}
+			if res.Err != nil {
+				log.Printf("portwatch: scan error: %v", res.Err)
+				d.collector.RecordScan(0, 0, 0, res.Err)
+				continue
+			}
+
+			newCount := len(res.Diff.Opened)
+			closedCount := len(res.Diff.Closed)
+
+			d.collector.RecordScan(len(res.Ports), newCount, closedCount, nil)
+
+			if newCount > 0 || closedCount > 0 {
+				if err := d.notifier.Notify(res.Diff); err != nil {
+					log.Printf("portwatch: alert error: %v", err)
+				}
+			}
+
+			log.Printf("portwatch: scan complete at %s — ports=%d new=%d closed=%d",
+				time.Now().Format(time.RFC3339),
+				len(res.Ports), newCount, closedCount)
 		}
 	}
-}
-
-func (d *Daemon) tick() error {
-	prev, err := ports.LoadSnapshot(d.snapshotPath)
-	if err != nil {
-		return err
-	}
-
-	current, err := d.scanner.Scan()
-	if err != nil {
-		return err
-	}
-
-	diff := ports.Diff(prev, current)
-	d.notifier.Notify(diff)
-
-	return current.Save(d.snapshotPath)
 }
