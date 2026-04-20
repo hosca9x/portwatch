@@ -15,6 +15,18 @@ func defaultCfg() *config.Config {
 	return cfg
 }
 
+// tempSnapshotFile creates a temporary file for use as a snapshot path in
+// tests and returns its name along with a cleanup function.
+func tempSnapshotFile(t *testing.T) (string, func()) {
+	t.Helper()
+	tmp, err := os.CreateTemp("", "portwatch-snap-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp.Close()
+	return tmp.Name(), func() { os.Remove(tmp.Name()) }
+}
+
 func TestNew_ReturnsNonNil(t *testing.T) {
 	cfg := defaultCfg()
 	d, err := New(cfg, "/tmp/portwatch_test_snap.json")
@@ -30,14 +42,10 @@ func TestRun_CancelsCleanly(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.IntervalSeconds = 60 // long interval so only initial tick fires
 
-	tmp, err := os.CreateTemp("", "portwatch-snap-*.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp.Close()
-	defer os.Remove(tmp.Name())
+	snap, cleanup := tempSnapshotFile(t)
+	defer cleanup()
 
-	d, err := New(cfg, tmp.Name())
+	d, err := New(cfg, snap)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
