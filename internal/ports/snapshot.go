@@ -2,49 +2,35 @@ package ports
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
-	"time"
 )
 
-// Entry represents a single open port at a point in time.
-type Entry struct {
-	Protocol string `json:"protocol"`
-	Port     int    `json:"port"`
-	Process  string `json:"process,omitempty"`
-}
-
-// Snapshot holds a collection of open ports captured at a specific time.
-type Snapshot struct {
-	CapturedAt time.Time `json:"captured_at"`
-	Entries    []Entry   `json:"entries"`
-}
-
-// Save writes the snapshot to the given file path as JSON.
-func (s *Snapshot) Save(path string) error {
-	f, err := os.Create(path)
+// SaveSnapshot persists entries to path as JSON, creating the file if needed.
+func SaveSnapshot(path string, entries []Entry) error {
+	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(s)
+	return os.WriteFile(path, data, 0o644)
 }
 
-// LoadSnapshot reads a snapshot from the given file path.
-// Returns nil, nil if the file does not exist.
-func LoadSnapshot(path string) (*Snapshot, error) {
-	f, err := os.Open(path)
+// LoadSnapshot reads a previously saved snapshot from path.
+// Returns nil slice (no error) when the file does not exist.
+func LoadSnapshot(path string) ([]Entry, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	defer f.Close()
-	var s Snapshot
-	if err := json.NewDecoder(f).Decode(&s); err != nil {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var entries []Entry
+	if err := json.Unmarshal(data, &entries); err != nil {
 		return nil, err
 	}
-	return &s, nil
+	return entries, nil
 }
