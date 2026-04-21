@@ -1,17 +1,27 @@
 # portwatch example configuration
 
 # How often to scan open ports (Go duration string)
+# Examples: 15s, 1m, 5m30s
 interval: 30s
 
 # Path to write alert log. Leave empty to use stdout.
 alert_file: ""
 
 # Ports to ignore (never alert on these)
+# Add any ports that are expected to be open on this host.
 ignore:
   - 22    # SSH
   - 53    # DNS
+  - 80    # HTTP
+  - 443   # HTTPS
 
 # Protocols to monitor
+# Supported values: tcp, udp
 protocols:
   - tcp
   - udp
+
+# Minimum number of consecutive scans a new port must appear in before alerting.
+# Set to 1 to alert immediately. Higher values reduce false positives from
+# short-lived ports (e.g. ephemeral connections).
+confirm_count: 1
