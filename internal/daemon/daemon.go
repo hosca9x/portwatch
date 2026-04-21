@@ -10,55 +10,59 @@ import (
 	"github.com/user/portwatch/internal/ports"
 )
 
-// Daemon orchestrates periodic port scanning, diffing, alerting, and throttling.
+// Daemon orchestrates scanning, diffing, alerting, and debouncing.
 type Daemon struct {
-	cfg       config.Config
+	cfg       *config.Config
 	watcher   *ports.Watcher
 	notifier  *alert.Notifier
-	throttler *ports.Throttler
+	debouncer *ports.Debouncer
 }
 
-// New constructs a Daemon from the provided config.
-func New(cfg config.Config) *Daemon {
-	watcher := ports.NewWatcher(cfg)
+// New constructs a Daemon wired with the provided config.
+func New(cfg *config.Config) *Daemon {
 	notifier := alert.NewNotifier(nil)
-	throttler := ports.NewThrottler(ports.ThrottleConfig{
-		MaxScansPerMinute: cfg.MaxScansPerMinute,
-		BurstSize:         cfg.BurstSize,
-	}, nil)
-	return &Daemon{
-		cfg:       cfg,
-		watcher:   watcher,
-		notifier:  notifier,
-		throttler: throttler,
+
+	d := &Daemon{
+		cfg:      cfg,
+		notifier: notifier,
+		watcher:  ports.NewWatcher(cfg),
 	}
+
+	d.debouncer = ports.NewDebouncer(
+		time.Duration(cfg.DebounceSecs)*time.Second,
+		func(key string) {
+			log.Printf("[debounce] stable change confirmed for key: %s", key)
+		},
+	)
+
+	return d
 }
 
-// Run starts the daemon loop. It blocks until ctx is cancelled.
+// Run starts the daemon loop, blocking until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(d.cfg.IntervalSeconds) * time.Second)
-	defer ticker.Stop()
-
-	log.Println("portwatch daemon started")
+	results := d.watcher.Watch(ctx)
 
 	for {
 		select {
+		case res, ok := <-results:
+			if !ok {
+				return nil
+			}
+			if res.Err != nil {
+				log.Printf("[daemon] scan error: %v", res.Err)
+				continue
+			}
+			for _, e := range res.Diff.Opened {
+				d.debouncer.Trigger(e.Key())
+			}
+			for _, e := range res.Diff.Closed {
+				d.debouncer.Trigger(e.Key())
+			}
+			if err := d.notifier.Notify(res.Diff); err != nil {
+				log.Printf("[daemon] notify error: %v", err)
+			}
 		case <-ctx.Done():
-			log.Println("portwatch daemon stopping")
 			return nil
-		case <-ticker.C:
-			if !d.throttler.Allow() {
-				log.Println("scan throttled, skipping interval")
-				continue
-			}
-			results, err := d.watcher.Scan(ctx)
-			if err != nil {
-				log.Printf("scan error: %v", err)
-				continue
-			}
-			if err := d.notifier.Notify(results); err != nil {
-				log.Printf("notify error: %v", err)
-			}
 		}
 	}
 }
