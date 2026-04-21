@@ -8,36 +8,40 @@ import (
 
 // Config holds portwatch runtime configuration.
 type Config struct {
-	Interval     int      `yaml:"interval"`      // seconds between scans
-	Protocols    []string `yaml:"protocols"`     // tcp, udp
-	ExcludePorts []int    `yaml:"exclude_ports"` // ports to ignore
-	SnapshotPath string   `yaml:"snapshot_path"` // where to persist state
-	LogLevel     string   `yaml:"log_level"`     // info, debug, warn
+	Interval    int      `yaml:"interval_seconds"`
+	Protocols   []string `yaml:"protocols"`
+	ExcludePorts []int   `yaml:"exclude_ports"`
+	SnapshotPath string  `yaml:"snapshot_path"`
+	HistoryPath  string  `yaml:"history_path"`
+	BaselinePath string  `yaml:"baseline_path"`
+	HighPriorityPorts   []int `yaml:"high_priority_ports"`
+	MediumPriorityPorts []int `yaml:"medium_priority_ports"`
+	MinAlertSeverity    int   `yaml:"min_alert_severity"`
 }
 
 // Default returns a Config populated with sensible defaults.
-func Default() *Config {
-	return &Config{
-		Interval:     30,
-		Protocols:    []string{"tcp", "udp"},
-		ExcludePorts: []int{},
-		SnapshotPath: "/tmp/portwatch_snapshot.json",
-		LogLevel:     "info",
+func Default() Config {
+	return Config{
+		Interval:            30,
+		Protocols:           []string{"tcp", "udp"},
+		SnapshotPath:        "/tmp/portwatch_snapshot.json",
+		HistoryPath:         "/tmp/portwatch_history.json",
+		BaselinePath:        "/tmp/portwatch_baseline.json",
+		HighPriorityPorts:   []int{22, 443, 3389},
+		MediumPriorityPorts: []int{80, 8080, 8443},
+		MinAlertSeverity:    1,
 	}
 }
 
-// Load reads a YAML config file and merges it over the defaults.
-func Load(path string) (*Config, error) {
+// Load reads a YAML config file and merges it over defaults.
+func Load(path string) (Config, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
-		return nil, err
+		return cfg, err
 	}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, err
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, err
 	}
 	if len(cfg.Protocols) == 0 {
 		cfg.Protocols = []string{"tcp", "udp"}
