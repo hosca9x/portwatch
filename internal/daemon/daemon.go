@@ -10,65 +10,55 @@ import (
 	"github.com/user/portwatch/internal/ports"
 )
 
-// Daemon orchestrates periodic port scanning, diffing, alerting, and metrics.
+// Daemon orchestrates periodic port scanning, diffing, alerting, and throttling.
 type Daemon struct {
-	cfg       *config.Config
+	cfg       config.Config
 	watcher   *ports.Watcher
 	notifier  *alert.Notifier
-	collector *ports.Collector
+	throttler *ports.Throttler
 }
 
-// New creates a Daemon from the provided configuration.
-func New(cfg *config.Config) *Daemon {
+// New constructs a Daemon from the provided config.
+func New(cfg config.Config) *Daemon {
+	watcher := ports.NewWatcher(cfg)
+	notifier := alert.NewNotifier(nil)
+	throttler := ports.NewThrottler(ports.ThrottleConfig{
+		MaxScansPerMinute: cfg.MaxScansPerMinute,
+		BurstSize:         cfg.BurstSize,
+	}, nil)
 	return &Daemon{
-		cfg:      cfg,
-		watcher:  ports.NewWatcher(cfg),
-		notifier: alert.NewNotifier(cfg),
-		collector: ports.NewCollector(),
+		cfg:       cfg,
+		watcher:   watcher,
+		notifier:  notifier,
+		throttler: throttler,
 	}
 }
 
-// Metrics returns a snapshot of the current scan metrics.
-func (d *Daemon) Metrics() ports.ScanMetrics {
-	return d.collector.Snapshot()
-}
-
-// Run starts the daemon loop, blocking until ctx is cancelled.
+// Run starts the daemon loop. It blocks until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
-	log.Printf("portwatch: starting — interval %s", d.cfg.Interval)
+	ticker := time.NewTicker(time.Duration(d.cfg.IntervalSeconds) * time.Second)
+	defer ticker.Stop()
 
-	results := d.watcher.Watch(ctx)
+	log.Println("portwatch daemon started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("portwatch: shutting down")
+			log.Println("portwatch daemon stopping")
 			return nil
-
-		case res, ok := <-results:
-			if !ok {
-				return nil
-			}
-			if res.Err != nil {
-				log.Printf("portwatch: scan error: %v", res.Err)
-				d.collector.RecordScan(0, 0, 0, res.Err)
+		case <-ticker.C:
+			if !d.throttler.Allow() {
+				log.Println("scan throttled, skipping interval")
 				continue
 			}
-
-			newCount := len(res.Diff.Opened)
-			closedCount := len(res.Diff.Closed)
-
-			d.collector.RecordScan(len(res.Ports), newCount, closedCount, nil)
-
-			if newCount > 0 || closedCount > 0 {
-				if err := d.notifier.Notify(res.Diff); err != nil {
-					log.Printf("portwatch: alert error: %v", err)
-				}
+			results, err := d.watcher.Scan(ctx)
+			if err != nil {
+				log.Printf("scan error: %v", err)
+				continue
 			}
-
-			log.Printf("portwatch: scan complete at %s — ports=%d new=%d closed=%d",
-				time.Now().Format(time.RFC3339),
-				len(res.Ports), newCount, closedCount)
+			if err := d.notifier.Notify(results); err != nil {
+				log.Printf("notify error: %v", err)
+			}
 		}
 	}
 }
