@@ -99,3 +99,17 @@ func TestBaseline_SaveCreatesFile(t *testing.T) {
 		t.Fatalf("expected file to exist: %v", err)
 	}
 }
+
+func TestNewBaseline_EmptyEntries(t *testing.T) {
+	// NewBaseline with nil and with an empty slice should both produce
+	// a valid Baseline with zero ports and a non-zero CreatedAt.
+	for _, entries := range [][]PortEntry{nil, {}} {
+		b := NewBaseline(entries)
+		if len(b.Ports) != 0 {
+			t.Errorf("expected 0 ports, got %d", len(b.Ports))
+		}
+		if b.CreatedAt.IsZero() {
+			t.Error("expected non-zero CreatedAt for empty baseline")
+		}
+	}
+}
