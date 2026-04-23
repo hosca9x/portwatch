@@ -104,3 +104,21 @@ func TestDecayTracker_ObserveDoesNotResetTimestamp(t *testing.T) {
 		t.Errorf("expected age=30m, got %v", r.Age)
 	}
 }
+
+func TestDecayTracker_WeightApproximatelyHalfAfterOneHalfLife(t *testing.T) {
+	base := time.Unix(0, 0)
+	d := NewDecayTracker(30 * time.Minute)
+	d.clock = fixedDecayClock(base)
+
+	d.Observe("tcp:8443")
+
+	d.clock = fixedDecayClock(base.Add(30 * time.Minute))
+	r := d.Report("tcp:8443")
+
+	// After exactly one half-life the weight should be 0.5
+	const want = 0.5
+	const tolerance = 0.001
+	if r.Weight < want-tolerance || r.Weight > want+tolerance {
+		t.Errorf("expected weight≈0.5 after one half-life, got %f", r.Weight)
+	}
+}
