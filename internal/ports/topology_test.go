@@ -18,6 +18,13 @@ func makeTopologyEntries(keys ...string) []PortEntry {
 	return out
 }
 
+// newTestClock returns a mutable clock and an advance function for use in tests.
+func newTestClock(start time.Time) (clock func() time.Time, advance func(time.Duration)) {
+	now := start
+	return func() time.Time { return now },
+		func(d time.Duration) { now = now.Add(d) }
+}
+
 func TestTopologyTracker_EmptyOnNoRecord(t *testing.T) {
 	tr := newTopologyTrackerWithClock(time.Minute, fixedTopologyClock)
 	snap := tr.Snapshot()
@@ -45,13 +52,12 @@ func TestTopologyTracker_TwoEntriesOneEdge(t *testing.T) {
 }
 
 func TestTopologyTracker_EdgesExpireAfterWindow(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := func() time.Time { return now }
+	clock, advance := newTestClock(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	tr := newTopologyTrackerWithClock(time.Minute, clock)
 	tr.Record([]PortEntry{{Port: 80, Proto: "tcp"}, {Port: 443, Proto: "tcp"}})
 
 	// advance past window
-	now = now.Add(2 * time.Minute)
+	advance(2 * time.Minute)
 	snap := tr.Snapshot()
 	if len(snap.Edges) != 0 {
 		t.Fatalf("expected edges to expire, got %v", snap.Edges)
@@ -59,12 +65,11 @@ func TestTopologyTracker_EdgesExpireAfterWindow(t *testing.T) {
 }
 
 func TestTopologyTracker_DeduplicatesEdgesAcrossBuckets(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := func() time.Time { return now }
+	clock, advance := newTestClock(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	tr := newTopologyTrackerWithClock(time.Minute, clock)
 	entries := []PortEntry{{Port: 80, Proto: "tcp"}, {Port: 443, Proto: "tcp"}}
 	tr.Record(entries)
-	now = now.Add(10 * time.Second)
+	advance(10 * time.Second)
 	tr.Record(entries)
 	snap := tr.Snapshot()
 	// dedup means still only one edge per direction
