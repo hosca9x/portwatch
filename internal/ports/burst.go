@@ -87,3 +87,23 @@ func (b *BurstDetector) Reset(key string) {
 	defer b.mu.Unlock()
 	delete(b.events, key)
 }
+
+// ActiveKeys returns the list of keys that currently have at least one event
+// within the burst window. This can be used to inspect which sources are
+// actively generating events.
+func (b *BurstDetector) ActiveKeys() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	cutoff := b.clock().Add(-b.policy.Window)
+	keys := make([]string, 0, len(b.events))
+	for key, evs := range b.events {
+		for _, e := range evs {
+			if e.at.After(cutoff) {
+				keys = append(keys, key)
+				break
+			}
+		}
+	}
+	return keys
+}
